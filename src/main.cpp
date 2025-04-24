@@ -14,7 +14,7 @@ void startCameraServer() {
     response += "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n\r\n";
     client.print(response);
 
-    while (1) {
+    while (client.connected()) {
       camera_fb_t *fb = esp_camera_fb_get();
       if (!fb) continue;
 
@@ -22,8 +22,6 @@ void startCameraServer() {
       client.write(fb->buf, fb->len);
       client.print("\r\n");
       esp_camera_fb_return(fb);
-
-      if (!client.connected()) break;
       delay(50);
     }
   });
