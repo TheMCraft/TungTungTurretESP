@@ -3,9 +3,9 @@
 #include <WebServer.h>
 
 const char* ssid = "htl-IoT";
-const char* password = "PASSWORD";
+const char* password = "";
 
-WebServer server(80);
+WebServer server(8787);
 
 void startCameraServer() {
   server.on("/stream", HTTP_GET, []() {
@@ -27,7 +27,21 @@ void startCameraServer() {
       delay(50);
     }
   });
-  server.begin();
+  server.on("/", HTTP_GET, []() {
+    WiFiClient client = server.client();
+    String header = "HTTP/1.1 200 OK\r\n";
+    header += "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n\r\n";
+    client.print(header);
+  
+    while (client.connected()) {
+      String str = "tung tung tung sahur";
+      client.printf("--frame\r\nContent-Type: text/plain\r\nContent-Length: %u\r\n\r\n", str.length());
+      client.print(str);
+      client.print("\r\n");
+      delay(50);
+    }
+  });
+  server.begin();  
 }
 
 /*
@@ -98,5 +112,20 @@ void setup() {
 }
 
 void loop() {
+  if (Serial.available()) {
+    char c = Serial.read();
+    if (c == 's') setup();
+    if (c == 'w') {
+      WiFi.begin(ssid, password);
+      while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+      }
+      Serial.println("");
+      Serial.println("WLAN verbunden. IP-Adresse: " + WiFi.localIP().toString());
+
+      startCameraServer();
+    }
+  }
   server.handleClient();
 }
