@@ -1,129 +1,113 @@
+#include <Arduino.h>
 #include "esp_camera.h"
 #include <WiFi.h>
-#include <WebServer.h>
 
-const char* ssid = "htl-IoT";
-const char* password = "";
+//
+// WARNING!!! PSRAM IC required for UXGA resolution and high JPEG quality
+//            Ensure ESP32 Wrover Module or other board with PSRAM is selected
+//            Partial images will be transmitted if image exceeds buffer size
+//
 
-WebServer server(8787);
+// Select camera model
+//#define CAMERA_MODEL_WROVER_KIT // Has PSRAM
+//#define CAMERA_MODEL_ESP_EYE // Has PSRAM
+//#define CAMERA_MODEL_M5STACK_PSRAM // Has PSRAM
+//#define CAMERA_MODEL_M5STACK_V2_PSRAM // M5Camera version B Has PSRAM
+//#define CAMERA_MODEL_M5STACK_WIDE // Has PSRAM
+//#define CAMERA_MODEL_M5STACK_ESP32CAM // No PSRAM
+#define CAMERA_MODEL_AI_THINKER // Has PSRAM
+//#define CAMERA_MODEL_TTGO_T_JOURNAL // No PSRAM
 
-void startCameraServer() {
-  server.on("/stream", HTTP_GET, []() {
-    WiFiClient client = server.client();
-    String response = "HTTP/1.1 200 OK\r\n";
-    response += "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n\r\n";
-    client.print(response);
+#include "camera_pins.h"
 
-    while (client.connected()) {
-      camera_fb_t *fb = esp_camera_fb_get();
-      if (!fb) continue;
+const char* ssid = "mcraft";
+const char* password = "12345678";
 
-      client.printf("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", fb->len);
-      client.write(fb->buf, fb->len);
-      client.print("\r\n");
-      esp_camera_fb_return(fb);
-      delay(50);
-    }
-  });
-  server.on("/", HTTP_GET, []() {
-    WiFiClient client = server.client();
-    String header = "HTTP/1.1 200 OK\r\n";
-    header += "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n\r\n";
-    client.print(header);
-  
-    while (client.connected()) {
-      String str = "tung tung tung sahur";
-      client.printf("--frame\r\nContent-Type: text/plain\r\nContent-Length: %u\r\n\r\n", str.length());
-      client.print(str);
-      client.print("\r\n");
-      delay(50);
-    }
-  });
-  server.begin();  
-}
-
-/*
-OV2640-Pin | ESP32 GPIO
-D0 | 5
-D1 | 18
-D2 | 19
-D3 | 21
-D4 | 36
-D5 | 39
-D6 | 34
-D7 | 35
-XCLK | 0
-PCLK | 22
-VSYNC | 25
-HREF | 23
-SDA | 26
-SCL | 27
-PWDN | 32
-RESET | -1
-VCC | 3.3 V
-GND | GND
-*/
+void startCameraServer();
 
 void setup() {
   Serial.begin(115200);
+  Serial.setDebugOutput(true);
+  Serial.println();
 
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer = LEDC_TIMER_0;
-  config.pin_d0 = 5;
-  config.pin_d1 = 18;
-  config.pin_d2 = 19;
-  config.pin_d3 = 21;
-  config.pin_d4 = 36;
-  config.pin_d5 = 39;
-  config.pin_d6 = 34;
-  config.pin_d7 = 35;
-  config.pin_xclk = 0;
-  config.pin_pclk = 22;
-  config.pin_vsync = 25;
-  config.pin_href = 23;
-  config.pin_sscb_sda = 26;
-  config.pin_sscb_scl = 27;
-  config.pin_pwdn = 32;
-  config.pin_reset = -1;
+  config.pin_d0 = Y2_GPIO_NUM;
+  config.pin_d1 = Y3_GPIO_NUM;
+  config.pin_d2 = Y4_GPIO_NUM;
+  config.pin_d3 = Y5_GPIO_NUM;
+  config.pin_d4 = Y6_GPIO_NUM;
+  config.pin_d5 = Y7_GPIO_NUM;
+  config.pin_d6 = Y8_GPIO_NUM;
+  config.pin_d7 = Y9_GPIO_NUM;
+  config.pin_xclk = XCLK_GPIO_NUM;
+  config.pin_pclk = PCLK_GPIO_NUM;
+  config.pin_vsync = VSYNC_GPIO_NUM;
+  config.pin_href = HREF_GPIO_NUM;
+  config.pin_sscb_sda = SIOD_GPIO_NUM;
+  config.pin_sscb_scl = SIOC_GPIO_NUM;
+  config.pin_pwdn = PWDN_GPIO_NUM;
+  config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
-  config.frame_size = FRAMESIZE_QVGA;
-  config.jpeg_quality = 10;
-  config.fb_count = 1;
+  
+  // if PSRAM IC present, init with UXGA resolution and higher JPEG quality
+  //                      for larger pre-allocated frame buffer.
+  if(psramFound()){
+    config.frame_size = FRAMESIZE_UXGA;
+    config.jpeg_quality = 10;
+    config.fb_count = 2;
+  } else {
+    config.frame_size = FRAMESIZE_SVGA;
+    config.jpeg_quality = 12;
+    config.fb_count = 1;
+  }
 
+#if defined(CAMERA_MODEL_ESP_EYE)
+  pinMode(13, INPUT_PULLUP);
+  pinMode(14, INPUT_PULLUP);
+#endif
+
+  // camera init
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
-    Serial.printf("Kamerainit fehlgeschlagen: 0x%x\n", err);
+    Serial.printf("Camera init failed with error 0x%x", err);
     return;
   }
 
+  sensor_t * s = esp_camera_sensor_get();
+  // initial sensors are flipped vertically and colors are a bit saturated
+  if (s->id.PID == OV3660_PID) {
+    s->set_vflip(s, 1); // flip it back
+    s->set_brightness(s, 1); // up the brightness just a bit
+    s->set_saturation(s, -2); // lower the saturation
+  }
+  // drop down frame size for higher initial frame rate
+  s->set_framesize(s, FRAMESIZE_QVGA);
+
+#if defined(CAMERA_MODEL_M5STACK_WIDE) || defined(CAMERA_MODEL_M5STACK_ESP32CAM)
+  s->set_vflip(s, 1);
+  s->set_hmirror(s, 1);
+#endif
+
   WiFi.begin(ssid, password);
+
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
   Serial.println("");
-  Serial.println("WLAN verbunden. IP-Adresse: " + WiFi.localIP().toString());
+  Serial.println("WiFi connected");
 
   startCameraServer();
+
+  Serial.print("Camera Ready! Use 'http://");
+  Serial.print(WiFi.localIP());
+  Serial.println("' to connect");
 }
 
 void loop() {
-  if (Serial.available()) {
-    char c = Serial.read();
-    if (c == 's') setup();
-    if (c == 'w') {
-      WiFi.begin(ssid, password);
-      while (WiFi.status() != WL_CONNECTED) {
-        delay(500);
-        Serial.print(".");
-      }
-      Serial.println("");
-      Serial.println("WLAN verbunden. IP-Adresse: " + WiFi.localIP().toString());
-
-      startCameraServer();
-    }
-  }
-  server.handleClient();
+  // put your main code here, to run repeatedly:
+  delay(10000);
 }
